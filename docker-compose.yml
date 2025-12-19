@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: research_platform_db
+    environment:
+      POSTGRES_USER: research_user
+      POSTGRES_PASSWORD: research_pass
+      POSTGRES_DB: research_platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - research_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U research_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: research_platform_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - research_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: research_platform_backend
+    environment:
+      DATABASE_URL: postgresql://research_user:research_pass@postgres:5432/research_platform
+      ASYNC_DATABASE_URL: postgresql+asyncpg://research_user:research_pass@postgres:5432/research_platform
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      CORS_ORIGINS: http://localhost:3000,http://localhost:5173
+      DEBUG: "True"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app
+      - backend_uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - research_network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Frontend (React)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: research_platform_frontend
+    environment:
+      VITE_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/src:/app/src
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - research_network
+    command: npm run dev -- --host 0.0.0.0 --port 3000
+
+volumes:
+  postgres_data:
+  redis_data:
+  backend_uploads:
+
+networks:
+  research_network:
+    driver: bridge
